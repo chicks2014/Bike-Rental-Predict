@@ -4,7 +4,7 @@
 rm(list = ls())
 
 # set working directory
-setwd("C:/Users/chetan_hirapara/Downloads/Chicks/Learning/Edwisor_main/Projects/BikeRental")
+setwd("C:/BikeRental")
 
 # verify working directory
 getwd()
