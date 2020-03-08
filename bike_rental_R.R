@@ -4,7 +4,7 @@
 rm(list = ls())
 
 # set working directory
-setwd("C:/Bike-Rental-Predict")
+setwd("C:/Users/chetan_hirapara/Downloads/Chicks/Learning/Edwisor_main/Projects/BikeRental/Bike-Rental-Predict")
 
 # verify working directory
 getwd()
@@ -22,23 +22,58 @@ libraryList <- c(
   "randomForest",
   "dplyr",
   "e1071",
-  "xgboost"
+  "xgboost",
+  "scales",
+  "usdm"
 )
 lapply(libraryList, require, character.only = TRUE)
 
 ## load data
 bike_rental <- read.csv("day.csv", header = T, na.strings = c(" ", "", "NA", NA))
 
+# -----------------------------
+# Exploratory data analysis
+# -----------------------------
+
+# First let denormalize our dataset for EDA
+# for temp and atemp we'll use below formula 
+# y^ = y^ norm× * (maxY−minY) + minY
+# for temp given values are
+#  t_min=-8, t_max=+39
+bike_rental$temp = (bike_rental$temp * (39 - (-8))) + (-8)
+
+
+# for atemp given values are
+# t_min=-16, t_max=+50
+bike_rental$atemp = (bike_rental$atemp * (50 - (-16))) + (-16)
+
+
+# for hum given values was divided by 100
+# So, we can calculate actual values by multiply with 100
+bike_rental$hum = bike_rental$hum * 100
+
+# for windspeed given values was divided by 67
+# So, we can calculate actual values by multiply with 67
+bike_rental$windspeed = bike_rental$windspeed * 67
+
 # check dimention of data frame
 dim(bike_rental)
 
-# remove unique id column
+# view summary of data
+summary(bike_rental)
+
+# top 5 records from casual, registered and cnt
+bike_rental$casual[0:5] + bike_rental$registered[0:5] == bike_rental$cnt[0:5]
+
+# It seems that cnt variable is addition of casual and registered variable
+# We can remove casual and registered variable
+# remove unnecessary variables like instant and dteday which are not fruiful for model 
 bike_rental <- subset(bike_rental, select = -c(instant, dteday , casual, registered))
 
 # view structure of data
 str(bike_rental)
 
-# convert some variables from int to factor
+# convert some variables from int to factor for perform EDA
 for (i in seq(1, 7)) {
   bike_rental[, i] <- as.factor(bike_rental[, i])
 }
@@ -49,9 +84,9 @@ summary(bike_rental)
 # print column names
 colnames(bike_rental)
 
-#-------------------------------
-# EDA
-# ------------------------------
+#---------------------------------------------------------- 
+# Bivariant analysis
+#---------------------------------------------------------- 
 
 # labels of weekday
 weekday_labels <- c("Sun", "Mon", "Tue", "Wed", "Thur", "Fri", "Sat")
@@ -107,9 +142,7 @@ ggplot(bike_rental, aes(x = weekday, y = count, color = mnth)) +
   scale_y_continuous("Count", pretty_breaks(n = 25)) + 
   scale_x_discrete(labels = weekday_labels)
 
-# -------------------
-# Scatter plots
-# -------------------
+
 # Temp Vs Count
 ggplot(bike_rental, aes(temp, cnt)) +
   geom_point(aes(color = temp), alpha = 0.2) + theme_bw() + xlab("Temperature") + ylab("Count") + labs(title = "Temperature Vs Count")
@@ -149,6 +182,10 @@ ggplot(bike_rental, aes(weathersit, cnt)) +
   scale_colour_hue("Weather", breaks = levels(bike_rental$weathersit), labels = weather_labels) + scale_x_discrete(labels = weather_labels)
   labs(title = "Weather Vs Count")
 
+#----------------------------------------------------------
+# Univariant analysis 
+#---------------------------------------------------------- 
+  
 # -------------------
 # Distibuation of continous variable
 # -------------------
@@ -205,6 +242,9 @@ check_missing_values <- function(df) {
 # call missing value function
 check_missing_values(bike_rental)
 
+# In our dataset we don't have any missing values
+# So, need to do further process for missing values
+
 # -------------------
 # Outlier Analysis
 # -------------------
@@ -231,10 +271,17 @@ for (i in numeric_column_Names) {
 # Features selection 
 # ------------------
 
+# convert factor to numeric
+for(i in seq(1,7)) {
+  bike_rental[,i] <- as.numeric(bike_rental[,i])
+}
+
 # correlation plot
 corrgram(bike_rental[,], order = TRUE, lower.panel = panel.shade, upper = panel.pie,  main="Correlation plot")
 
 # correlation between temp and atemp
+# It seems that correlation between temp and atemp is 0.9917
+# which is too much high
 cor(bike_rental$temp,bike_rental$atemp)
 
 # correlation between hum and atemp
@@ -243,152 +290,173 @@ cor(bike_rental$hum,bike_rental$temp)
 # correlation between temp and windspeed
 cor(bike_rental$temp,bike_rental$windspeed)
 
+# correlation between month and season
+cor(bike_rental$mnth,bike_rental$season)
+
+# find VIF values for correlation analysis
+vifstep(bike_rental, th = 10)
+
 # we can see that there are correlation between temp and atemp
 # we can remove atemp variable
 bike_rental = subset(bike_rental, select = c(-atemp))
 
-# ---------------------------------------------------------------------------------------------
-# use step wise regression
-# feature importance
+# remove this
+# workingday
+# season | month
+
+# ---------------------------
+# Features scaling
+# ---------------------------
+
+# Normalize data
+# Now. before moving to build model we need to rescale features
+# for temp given values are
+#  t_min=-8, t_max=+39
+bike_rental$temp = (bike_rental$temp - (-8)) / (39 - (-8)) 
+
+# for hum divide values by 100
+bike_rental$hum = bike_rental$hum / 100
+
+# for windspeed divide values by 67
+bike_rental$windspeed = bike_rental$windspeed / 67
 
 # ---------------------------------------------------------------------------------------------
-# Multiple linear regression
+# Model development
 # ---------------------------------------------------------------------------------------------
-# Splitting the Train dataset
 
-# convert factor to numeric
-for(i in seq(1,7)) {
-  bike_rental[,i] <- as.numeric(bike_rental[,i])
+# Mean absolute percent error function
+mape = function(act,preval) {
+  mean(abs((act - preval)/act)) * 100
 }
 
+# Mean absolute error function
+mae = function(act,preval) {
+  mean(abs((act - preval)))
+}
+
+# Splitting the Train dataset
 set.seed(123)
 split <- sample.split(bike_rental$cnt, SplitRatio = 0.80)
 train <- subset(bike_rental, split == TRUE)
 test <- subset(bike_rental, split == FALSE)
 
-# multiple linear regression
-linear_model <- lm(cnt~., data = train)
+# ------------------------------------------------------
+# Multiple linear regression
+# ------------------------------------------------------
 
+# multiple linear regression
+linear_model <- lm(cnt~. , data = train)
+
+# view model summary
 summary(linear_model)
 
+# plot Residuals vs Leverage, Normality, Residual vs Fitted
 plot(linear_model)
 
+# predict using linear model
 linear_predict <- predict(linear_model, newdata = test)
 
-# MAPE function
-mape = function(act,preval) {
-  mean(abs((act - preval)/act)) * 100
-}
-
-# MAE function
-mae = function(act,preval) {
-  mean(abs((act - preval)))
-}
-
-mae(test[,11], linear_predict)
-
+# calculate mape
 mape(test[,11],linear_predict)
 
-# Alternative method
-regr.eval(test[,11],linear_predict, stats = c("mae","mape"))
+# calculate mae
+mae(test[,11], linear_predict)
+
 
 # ************************
 # linear regression
 # MAPE - 18.9705
 # MAE = 679.5772
-# ************************
-# --------------
-
-# use step wise regression
-stepwise_AIC = step(linear_model, direction = "both")
-
-summary(stepwise_AIC)
-
-step_linear_predict <- predict(stepwise_AIC, newdata = test)
-
-mape(test$cnt, step_linear_predict)
-
-mae(test$cnt, step_linear_predict)
-
-# ************************
-# stepwise regression
-# MAPE - 19.2120
-# MAE - 684.0707
+# Residual standard error: 866.5 on 562 degrees of freedom
+# Multiple R-squared:  0.7945,	Adjusted R-squared:  0.7908 
+# F-statistic: 217.2 on 10 and 562 DF,  p-value: < 2.2e-16
 # ************************
 
 # ------------------------------------------------------
 # Random forest
+# ------------------------------------------------------
 
+# build random forest model
 random_model <- randomForest(cnt ~ ., data = test, importance = TRUE, ntree = 125)
 
-# random_model <- randomForest(cnt ~ yr + temp + mnth + season + hum + weathersit + windspeed + holiday, data = test, importance = TRUE, ntree = 125)
+random_model <- randomForest(cnt ~ yr + temp + mnth + season + hum + weathersit + windspeed + holiday, data = test, importance = TRUE, ntree = 125)
 
-# summary(random_model)
+# view summary of random forest model
+summary(random_model)
 
+# plot variable importance plot
 varImpPlot(random_model)
 
+# predict new data using random forest model
 random_predict <- predict(random_model, newdata =  test)
 
+# calculate mape
 mape(test$cnt, random_predict)
 
+# calculate mae 
 mae(test$cnt, random_predict)
 
+# view tree structure
 getTree(random_model,1,labelVar = TRUE)
 
 print(random_model)
 
+# plot error vs no of trees
 plot(random_model)
 
 # ************************
 # Random forest #125
-# MAPE = 9.7451
-# MAE = 281.83
+# MAPE = 9.7468
+# MAE = 281.9358
 # ************************
 
-# ----------------------------------------------------
-# Support Vector Regression
-
-svm_model <- svm(cnt ~., data = train)
-
-print(svm_model)
-
-svm_predict <- predict(svm_model, newdata = test)
-
-mape(test$cnt, svm_predict)
-
-mae(test$cnt, svm_predict)
-
-# ************************
-# SVM performance
-# MAPE = 13.6745
-# MAE = 419.8084
-# ************************
-
-# --------------------------------------------------
+# ------------------------------------------------------
 # XGBoost
+# ------------------------------------------------------
 
-X_train <- train %>% select(-c(cnt)) %>% as.matrix()
-y_train <- train$cnt
+# create matrix from train data
+# X_train <- subset(train, select = -c(cnt))
+X_train <- as.matrix(subset(train, select = -c(cnt)))
+X_label <- train$cnt
 
-# XGBoost model
-dmatrix <- xgb.DMatrix(X_train, label = y_train)
+# create matrix from test data
+# X_test <- subset(test, select = -c(cnt))
+X_test <- as.matrix(subset(test, select = -c(cnt)))
+y_label <- test$cnt
 
-xgboost_model = xgb.train(data = dmatrix, nround = 150, max_depth = 5, eta = 0.1, subsample = 0.9)
+#preparing matrix 
+dtrain <- xgb.DMatrix(data = X_train,label = X_label) 
+dtest <- xgb.DMatrix(data = X_test,label=y_label)
 
+# -------
+#default parameters
+params <- list(booster = "gbtree", objective = "reg:linear", eta=0.3, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+
+# find best iteration value
+xgbcv <- xgb.cv( params = params, data = dtrain, nrounds = 100, nfold = 5, showsd = T, stratified = T, print.every.n = 10, early.stop.round = 20, maximize = F)
+# -------
+
+# build XGBoost model
+xgboost_model = xgb.train(data = dtrain,  nround = 29, max_depth = 5,eta = 0.1, subsample = 0.6, 
+                          gamma = 5, min_child_weight = 2, colsample_bytree=0.9, nrounds = 100, eval_metric = 'mae')
+
+# plot variable importance 
 xgb.importance(feature_names = colnames(X_train), xgboost_model) %>% xgb.plot.importance()
 
-X_test <- test %>% select(-c(cnt)) %>% as.matrix()
-y_test <- test$cnt
+# predict using XGBoost model
+xgb_predict <- predict(xgboost_model, dtest)
 
-xgb_predict <- predict(xgboost_model, X_test)
-
+# calculate mape
 mape(test$cnt, xgb_predict)
 
+# calculate mae
 mae(test$cnt, xgb_predict)
 
 # ------------------------------
-# XGBoost 
-# mape = 13.0761
-# MAE = 411.1326
+# XGBoost performance matrix 
+# mape = 13.0895
+# MAE = 412.8454
 # ---------------------------
+
+# ***********************************************
 
